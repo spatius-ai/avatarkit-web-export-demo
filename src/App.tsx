@@ -5,34 +5,17 @@
  * lifecycle) and lib/videoExporter.ts (export). This file just wires them to a few buttons.
  */
 import { useEffect, useRef, useState } from 'react'
-import { useAvatarSession, type DriveMode } from './lib/useAvatarSession'
+import { useAvatarSession } from './lib/useAvatarSession'
 
 // Restore last inputs after a refresh. Local-demo convenience only, not a production
 // practice (the token is a short-lived credential).
 const load = (k: string, fallback = '') => localStorage.getItem(k) ?? fallback
 
-// Fixtures under public/. direct uses a prepared audio clip; backend uses integration-test data.
+// Prepared driving audio under public/.
 const DIRECT_AUDIO = '/direct-audio.pcm'
-const BACKEND_AUDIO = '/backend-audio.pcm'
-const BACKEND_FRAMES = '/host_replay_frames.bin'
 // Sample rate / channels / format must MATCH THE SDK INITIALIZATION CONFIG. The bundled
 // fixtures happen to be 16 kHz mono PCM16 — use whatever your SDK is configured for.
 const PCM_FORMAT = { sampleRate: 16000, channels: 1, format: 's16' as const }
-
-/** Parse the length-prefixed binary into an array of raw protobuf Messages (mirrors the
- *  integration test's loader). */
-function parseFrames(raw: Uint8Array): Uint8Array[] {
-  const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength)
-  const out: Uint8Array[] = []
-  let off = 0
-  while (off + 4 <= raw.length) {
-    const len = dv.getUint32(off, true); off += 4
-    const end = off + len
-    if (end > raw.length) break
-    out.push(raw.subarray(off, end)); off = end
-  }
-  return out
-}
 
 /** Read a local file as a data: URL (immune to CORS, so the export can composite it). */
 function fileToDataUrl(file: File): Promise<string> {
@@ -46,12 +29,12 @@ function fileToDataUrl(file: File): Promise<string> {
 
 export function App() {
   const stageRef = useRef<HTMLDivElement>(null)
-  const { phase, progress, error, boot, speakDirect, speakBackend } = useAvatarSession(stageRef)
+  const { phase, progress, error, boot, speakDirect } = useAvatarSession(stageRef)
 
   const [appId, setAppId] = useState(() => load('ak_appId', import.meta.env.VITE_APP_ID ?? ''))
   const [avatarId, setAvatarId] = useState(() => load('ak_avatarId', import.meta.env.VITE_AVATAR_ID ?? ''))
   const [token, setToken] = useState(() => load('ak_token'))
-  const [mode, setMode] = useState<DriveMode | null>(null) // the initialized mode
+  const [ready, setReady] = useState(false) // the SDK is initialized
   const [padBefore, setPadBefore] = useState('0') // extra idle seconds at the start
   const [padAfter, setPadAfter] = useState('0')   // extra idle seconds at the end
   const [bgImage, setBgImage] = useState<string | null>(null) // background image data: URL
@@ -62,9 +45,9 @@ export function App() {
   useEffect(() => { localStorage.setItem('ak_avatarId', avatarId) }, [avatarId])
   useEffect(() => { localStorage.setItem('ak_token', token) }, [token])
 
-  async function onBoot(m: DriveMode) {
-    await boot({ appId, sessionToken: token, avatarId, mode: m })
-    setMode(m)
+  async function onBoot() {
+    await boot({ appId, sessionToken: token, avatarId })
+    setReady(true)
   }
 
   async function onPickBackground(file: File) {
@@ -83,24 +66,11 @@ export function App() {
     backgroundImage: bgImage ?? undefined,
   })
 
-  /** direct: fetch the prepared audio, drive the SDK, export. */
-  async function onExportDirect() {
+  /** Fetch the prepared audio, drive the SDK, export. */
+  async function onExport() {
     setDownloadUrl(null)
     const buf = await (await fetch(DIRECT_AUDIO)).arrayBuffer()
     const { mp4, durationMs } = await speakDirect(buf.slice(0), { pcm: buf, ...PCM_FORMAT }, rec())
-    finish(mp4, durationMs)
-  }
-
-  /** backend: fetch the prepared audio + frames, feed the SDK, export. */
-  async function onExportBackend() {
-    setDownloadUrl(null)
-    const [audioBuf, framesBuf] = await Promise.all([
-      (await fetch(BACKEND_AUDIO)).arrayBuffer(),
-      (await fetch(BACKEND_FRAMES)).arrayBuffer(),
-    ])
-    const frames = parseFrames(new Uint8Array(framesBuf))
-    // Use an independent copy for the mux audio so it isn't consumed with the one fed to the SDK.
-    const { mp4, durationMs } = await speakBackend(new Uint8Array(audioBuf), frames, { pcm: audioBuf.slice(0), ...PCM_FORMAT }, rec())
     finish(mp4, durationMs)
   }
 
@@ -120,28 +90,19 @@ export function App() {
 
         <section style={card}>
           <div style={cardTitle}>1 · Credentials</div>
-          <Field label="App ID"><input value={appId} onChange={(e) => setAppId(e.target.value)} style={input} disabled={mode !== null} /></Field>
-          <Field label="Session Token"><input value={token} onChange={(e) => setToken(e.target.value)} style={input} placeholder="mint one and paste it here" disabled={mode !== null} /></Field>
-          <Field label="Avatar ID"><input value={avatarId} onChange={(e) => setAvatarId(e.target.value)} style={input} disabled={mode !== null} /></Field>
+          <Field label="App ID"><input value={appId} onChange={(e) => setAppId(e.target.value)} style={input} disabled={ready} /></Field>
+          <Field label="Session Token"><input value={token} onChange={(e) => setToken(e.target.value)} style={input} placeholder="mint one and paste it here" disabled={ready} /></Field>
+          <Field label="Avatar ID"><input value={avatarId} onChange={(e) => setAvatarId(e.target.value)} style={input} disabled={ready} /></Field>
         </section>
 
         <section style={card}>
-          <div style={cardTitle}>2 · Initialize (pick a mode)</div>
-          <div style={{ fontSize: 11, color: '#8a8a94', lineHeight: 1.5, marginBottom: 10 }}>
-            <b style={{ color: '#b0b0ba' }}>direct</b>: SDK connects to the backend, fed by audio.<br />
-            <b style={{ color: '#b0b0ba' }}>backend</b>: host feeds audio + frames, SDK offline (test data).
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => onBoot('direct')} disabled={mode !== null || !appId || !token || !avatarId} style={{ ...btn(true), flex: 1 }}>
-              {mode === 'direct' ? 'direct ✓' : 'direct'}
-            </button>
-            <button onClick={() => onBoot('backend')} disabled={mode !== null || !appId || !token || !avatarId} style={{ ...btn(true), flex: 1, background: mode === 'backend' ? '#2b8a5a' : '#7a4fd0' }}>
-              {mode === 'backend' ? 'backend ✓' : 'backend'}
-            </button>
-          </div>
+          <div style={cardTitle}>2 · Initialize</div>
+          <button onClick={onBoot} disabled={ready || !appId || !token || !avatarId} style={btn(true)}>
+            {ready ? 'Initialized ✓' : 'Initialize'}
+          </button>
         </section>
 
-        <section style={{ ...card, opacity: mode === null ? 0.5 : 1 }}>
+        <section style={{ ...card, opacity: ready ? 1 : 0.5 }}>
           <div style={cardTitle}>3 · Record</div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
             <Field label="Extra idle at start (s)">
@@ -161,11 +122,11 @@ export function App() {
             </div>
           )}
           <button
-            onClick={mode === 'backend' ? onExportBackend : onExportDirect}
-            disabled={mode === null || busy}
+            onClick={onExport}
+            disabled={!ready || busy}
             style={btn(false)}
           >
-            {busy ? 'Recording…' : `Record (${mode ?? 'pick a mode'})`}
+            {busy ? 'Recording…' : 'Record'}
           </button>
           {busy && <div style={hint}>captured {progress} frames · {phase === 'playing' ? 'playing' : 'encoding'}</div>}
           {downloadUrl && <a href={downloadUrl} download="avatar-export.mp4" style={dlLink}>⬇ Download MP4</a>}

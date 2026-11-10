@@ -4,7 +4,7 @@
  * The core reusable module of this demo. Framework-agnostic — copy it straight into your
  * project.
  *
- * ## Approach (same for direct and backend modes)
+ * ## Approach
  *
  * Rather than reaching for the underlying frame data (an SDK internal, not exposed by the
  * public API), we CAPTURE THE CANVAS as it plays:
@@ -43,11 +43,11 @@
  *
  * ## Start padding (padBefore) — keep the last N seconds, drop earlier ones
  *
- * In direct mode there's an unpredictable backend wait between send and playing (the picture
+ * There's an unpredictable server wait between send and playing (the picture
  * stays idle). So the idle recorded between "start recording" and "speaking" = your padBefore
  * + that wait. At stop() we keep only the padBefore seconds immediately before speaking and
- * drop the earlier wait frames — so no matter how long the backend took, the clip starts with
- * exactly padBefore. In backend mode that wait is ~0, so nothing is trimmed.
+ * drop the earlier wait frames — so no matter how long the server took, the clip starts with
+ * exactly padBefore.
  *
  * ## A/V sync
  *
@@ -127,11 +127,10 @@ export interface VideoExporterOptions {
   /**
    * Extra idle seconds kept at the start (default 0).
    *
-   * The frames recorded between "start recording" and "speaking (playing)" are all idle. In
-   * direct mode that span = your intended lead-in + the unpredictable backend wait; in backend
-   * mode it's near zero. However long it is, the clip keeps ONLY the padBeforeSec seconds
-   * immediately before speaking and drops the earlier frames — so direct's unpredictable wait
-   * is auto-trimmed and the start is exactly padBeforeSec.
+   * The frames recorded between "start recording" and "speaking (playing)" are all idle. That
+   * span = your intended lead-in + the unpredictable server wait. However long it is, the clip
+   * keeps ONLY the padBeforeSec seconds immediately before speaking and drops the earlier
+   * frames — so the unpredictable wait is auto-trimmed and the start is exactly padBeforeSec.
    */
   padBeforeSec?: number
   /** Extra idle seconds recorded at the end (after returning to idle) (default 0). */

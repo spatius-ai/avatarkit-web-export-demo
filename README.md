@@ -13,16 +13,9 @@ Shows how to use the [`@spatius/avatarkit`](https://docs.spatius.ai/) npm packag
 
 The core export logic is in [`src/lib/videoExporter.ts`](src/lib/videoExporter.ts) — **framework-agnostic, copy it straight into your project**. React is just this demo's shell.
 
-## Two driving modes
+## How the avatar is driven
 
-| | direct | backend |
-|---|---|---|
-| Who connects to the backend | **the SDK itself** (WebSocket) | **the host**, feeding audio + frames to the SDK |
-| Fed to the SDK | audio (`controller.send`) | audio + server-returned frames (`yieldAudioData` + `yieldFramesData`) |
-| Playback start | after the server returns frames | auto-starts once audio + frames are both in |
-| Data used by the demo | prepared audio `public/direct-audio.pcm` | prepared audio + frames `public/backend-audio.pcm` + `public/host_replay_frames.bin` |
-
-Both modes **share the exact same recording/export logic** — both listen to `onConversationState` for `playing`/`idle`.
+The SDK connects to Motion Server itself (Direct Mode): the demo feeds prepared audio (`public/direct-audio.pcm`) with `controller.send`, and playback starts once the server returns motion. Recording follows `onConversationState` (`playing` / `idle`).
 
 ## Run
 
@@ -32,7 +25,7 @@ npm run dev        # → http://localhost:5190/
 ```
 
 1. Fill in **App ID / Session Token / Avatar ID** (get them from the platform — see [Credentials](#credentials) below);
-2. Initialize by picking a mode: **direct** or **backend**;
+2. Click **Initialize**;
 3. Optionally set "extra idle at start / end" and a background image, then click **Record**;
 4. When playback ends the MP4 is generated automatically — click to download.
 
@@ -51,9 +44,8 @@ The SDK canvas is transparent. When exporting you can composite a background: pi
 
 ## ⚠️ Notes
 
-- **direct mode is network-sensitive**: a good network with no animation stutter is required for the recording to be **smooth and audio/video-synced**. When network jitter stalls the SDK's rendering, the captured frames become uneven and A/V may drift.
+- **Direct Mode is network-sensitive**: a good network with no animation stutter is required for the recording to be **smooth and audio/video-synced**. When network jitter stalls the SDK's rendering, the captured frames become uneven and A/V may drift.
 
-- **backend mode's demo data is for demonstration only**: `public/host_replay_frames.bin` is a fixed set of replay test data — **the result is poor**. For good results you need to **integrate the server-side SDK in backend mode yourself** and drive it with real server-returned frames. See https://docs.spatius.ai/ for integration.
 
 - **Match the canvas size to how large the video will be displayed**: the export resolution equals the canvas resolution (`AvatarView.renderSize`, which follows the mount container size — 512×512 in this demo). If the exported video will be shown large in your scene/page, render at a correspondingly larger canvas size; otherwise it's like scaling up a small image and looks blurry. (Larger also means more memory and slower encoding — see the next note.)
 
@@ -73,12 +65,10 @@ The SDK canvas is transparent. When exporting you can composite a background: pi
 src/
   lib/
     videoExporter.ts     ← core: capture-per-render + audio mux + H.264/AAC encode (reusable, framework-agnostic)
-    useAvatarSession.ts  ← session lifecycle: init → drive → record/export (direct / backend)
+    useAvatarSession.ts  ← session lifecycle: init → drive → record/export
   App.tsx                ← demo UI (thin shell, just the caller)
 public/
-  direct-audio.pcm       ← prepared driving audio for direct mode
-  backend-audio.pcm      ← prepared audio for backend mode
-  host_replay_frames.bin ← prepared frame data for backend mode (length-prefixed protobuf Messages; demo only)
+  direct-audio.pcm       ← prepared driving audio
 ```
 
 ## License

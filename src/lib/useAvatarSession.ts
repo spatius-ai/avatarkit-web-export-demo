@@ -2,20 +2,11 @@
  * useAvatarSession — a React hook that wires an AvatarKit driving session to the video
  * exporter.
  *
- * It's the "how to use it" core of the demo: two driving modes, one shared recording
- * lifecycle.
- *
- * ## direct mode (the SDK connects to the backend itself)
- *   init(direct) → loadAvatar → controller.start() → wait for `connected`
+ * It's the "how to use it" core of the demo. The SDK connects to Motion Server itself
+ * (Direct Mode):
+ *   init → loadAvatar → controller.start() → wait for `connected`
  *     → exporter.start() (begin recording) → controller.send(audio)
  *     → onConversationState=playing (mark the audio anchor) → …capture per render… → idle (produce MP4)
- *
- * ## backend mode (the host feeds audio + frames; the SDK never connects)
- *   init(backend) → loadAvatar → initializeAudioContext
- *     → exporter.start() (begin recording)
- *     → cid = yieldAudioData(pcm, true) → yieldFramesData(frames, cid)
- *     → SDK auto-starts playback → onConversationState=playing/idle (same as direct)
- *   backend needs no start() and no connection callback (there is no networkLayer).
  *
  * The export logic itself lives in lib/videoExporter.ts and is framework-agnostic; this
  * hook only binds it to the session lifecycle.
@@ -25,7 +16,6 @@ import { AvatarSDK, AvatarManager, AvatarView, DrivingServiceMode, ConversationS
 import { VideoExporter, type ExportAudio } from './videoExporter'
 
 export type SessionPhase = 'uninitialized' | 'ready' | 'playing' | 'exporting' | 'done'
-export type DriveMode = 'direct' | 'backend'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -33,7 +23,6 @@ export interface UseAvatarSessionConfig {
   appId: string
   sessionToken: string
   avatarId: string
-  mode: DriveMode
   region?: string
 }
 
@@ -58,20 +47,18 @@ export function useAvatarSession(containerRef: React.RefObject<HTMLElement>) {
   const [error, setError] = useState<string | null>(null)
 
   const viewRef = useRef<AvatarView | null>(null)
-  const modeRef = useRef<DriveMode>('direct')
   const exporterRef = useRef<VideoExporter | null>(null)
   // Resolve with the finished MP4 on idle; reject on error so callers never hang forever.
   const exportResolveRef = useRef<((r: ExportResult) => void) | null>(null)
   const exportRejectRef = useRef<((e: Error) => void) | null>(null)
 
-  /** Initialize the SDK, load the avatar, mount the render view. Once only; mode picks direct/backend. */
+  /** Initialize the SDK, load the avatar, mount the render view. Once only. */
   const boot = useCallback(async (cfg: UseAvatarSessionConfig) => {
     try {
       setError(null)
-      modeRef.current = cfg.mode
       await AvatarSDK.initialize(cfg.appId, {
         region: cfg.region ?? 'us-west',
-        drivingServiceMode: cfg.mode === 'backend' ? DrivingServiceMode.backend : DrivingServiceMode.direct,
+        drivingServiceMode: DrivingServiceMode.direct,
       })
       AvatarSDK.setSessionToken(cfg.sessionToken)
 
@@ -84,7 +71,7 @@ export function useAvatarSession(containerRef: React.RefObject<HTMLElement>) {
     }
   }, [containerRef])
 
-  /** Arm the recording lifecycle (shared by both modes): mark the anchor on playing,
+  /** Arm the recording lifecycle: mark the anchor on playing,
    *  produce the MP4 on idle. Returns the exporter and the done Promise. */
   const armExporter = (view: AvatarView, audioForMux: ExportAudio, rec: RecordOptions) => {
     setProgress(0)
@@ -131,7 +118,7 @@ export function useAvatarSession(containerRef: React.RefObject<HTMLElement>) {
   }
 
   /**
-   * DIRECT mode: the SDK connects to the backend. Feed audio to drive, record, export.
+   * The SDK connects to Motion Server. Feed audio to drive, record, export.
    * @param audioForDriving Audio fed to the SDK (PCM16 bytes; length must be even).
    * @param audioForMux     Audio muxed into the exported video (raw PCM with declared format).
    */
@@ -164,40 +151,10 @@ export function useAvatarSession(containerRef: React.RefObject<HTMLElement>) {
     // Connected → begin recording. Idle frames are captured from this moment.
     await exporter.start()
     // Record padBefore seconds of idle, then send. This gives enough leading idle frames;
-    // the send→playing backend wait records a few more, but those extras get trimmed at
+    // the send→playing server wait records a few more, but those extras get trimmed at
     // playing time so the final clip starts with exactly padBefore.
     await sleep(rec.padBefore * 1000)
     controller.send(audioForDriving, true) // feed the whole clip; end=true ends the round
-
-    return done
-  }, [])
-
-  /**
-   * BACKEND mode: the host feeds audio + server-returned frames; the SDK never connects.
-   * Uses the fixed integration-test fixture.
-   * @param pcm         Driving audio (PCM16 in a Uint8Array).
-   * @param frames      Raw protobuf Message array (parsed from host_replay_frames.bin).
-   * @param audioForMux Audio muxed into the exported video.
-   */
-  const speakBackend = useCallback(async (
-    pcm: Uint8Array, frames: Uint8Array[], audioForMux: ExportAudio, rec: RecordOptions,
-  ): Promise<ExportResult> => {
-    const view = viewRef.current
-    if (!view) throw new Error('call boot() first')
-    const controller = view.controller
-    const { exporter, done } = armExporter(view, audioForMux, rec)
-    controller.onError = (err) => setError(err.message)
-
-    // backend needs no start() and no connection callback (no networkLayer). Just init audio.
-    await controller.initializeAudioContext()
-
-    // Begin recording, record padBefore seconds of idle, then feed data. Backend playback
-    // starts almost immediately, so there's essentially nothing to trim.
-    await exporter.start()
-    await sleep(rec.padBefore * 1000)
-    const cid = controller.yieldAudioData(pcm, true) // returns conversationId
-    if (!cid) throw new Error('yieldAudioData returned no conversationId (audio context not initialized?)')
-    controller.yieldFramesData(frames, cid)          // feed all frames at once
 
     return done
   }, [])
@@ -208,5 +165,5 @@ export function useAvatarSession(containerRef: React.RefObject<HTMLElement>) {
     viewRef.current = null
   }, [])
 
-  return { phase, progress, error, boot, speakDirect, speakBackend }
+  return { phase, progress, error, boot, speakDirect }
 }
